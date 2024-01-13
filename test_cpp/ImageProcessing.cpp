@@ -1,4 +1,5 @@
 #include "ImageProcessing.h"
+
 #include <array>
 #include <cassert>
 #include <limits>

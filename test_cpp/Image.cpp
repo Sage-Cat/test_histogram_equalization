@@ -1,10 +1,12 @@
 #include "Image.h"
-#include "jpeg_decoder.h"
+
 #include <fstream>
 #include <iostream>
 #include <algorithm>
 #include <cstring> // for memcpy
 #include <memory>  // for smart pointers
+
+#include "jpeg_decoder.h"
 
 // Get a pixel value from the image
 Pixel Image::getPixel(size_t x, size_t y) const noexcept

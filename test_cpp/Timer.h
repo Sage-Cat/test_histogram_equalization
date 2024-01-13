@@ -1,13 +1,13 @@
 #pragma once
+#include <memory>
 
 struct ScopeTimer
 {
 public:
-    ScopeTimer();
-    ScopeTimer(char const* title);
+    explicit ScopeTimer(const char *title = nullptr);
     ~ScopeTimer();
-    
+
 private:
     struct pImpl;
-    pImpl* _pImpl;
+    std::unique_ptr<pImpl> _pImpl; // Using smart pointers for automatic memory management
 };
