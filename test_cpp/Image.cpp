@@ -3,8 +3,10 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
-#include <cstring> // for memcpy
-#include <memory>  // for smart pointers
+#include <cstring>
+#include <memory>
+#include <vector>
+#include <sstream>
 
 #include "jpeg_decoder.h"
 
@@ -93,90 +95,82 @@ Image::Image(const std::string &path)
     }
     else if (extension == "ppm")
     {
-        // Open PPM file with C-style I/O for better performance
-        FILE *f = fopen(path.c_str(), "rb");
-        if (!f)
+        // Open the PPM file in binary mode and position the file pointer at the end
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file)
         {
             std::cerr << "Error opening the input file \"" << path << "\"." << std::endl;
             return;
         }
 
-        // Read and verify the PPM header
-        char header[20];
-        if (!fgets(header, sizeof(header), f))
+        // Determine the file size and allocate a buffer
+        auto fileSize = file.tellg();
+        file.seekg(0, std::ios::beg);
+        std::vector<unsigned char> buffer(fileSize);
+
+        // Read the entire file into the buffer
+        if (!file.read(reinterpret_cast<char *>(buffer.data()), fileSize))
         {
-            std::cerr << "Error reading the header of the PPM file." << std::endl;
-            fclose(f);
+            std::cerr << "Error reading the PPM file." << std::endl;
             return;
         }
 
-        if (strncmp(header, "P6", 2) != 0)
+        // Parse the PPM header from the buffer
+        std::istringstream headerStream(std::string(buffer.begin(), buffer.begin() + 15)); // Assuming header is within first 15 bytes
+        std::string type;
+        headerStream >> type; // Should be "P6"
+        if (type != "P6")
         {
-            std::cerr << "Unsupported PPM format." << std::endl;
-            fclose(f);
+            std::cerr << "Unsupported PPM format: " << type << std::endl;
             return;
         }
 
-        // Read image dimensions
-        unsigned w, h;
-        if (fscanf(f, "%u %u\n255\n", &w, &h) != 2)
-        {
-            std::cerr << "Error reading the width and height from the PPM file." << std::endl;
-            fclose(f);
-            return;
-        }
-
+        size_t w, h;
+        headerStream >> w >> h;
         _width = w;
         _height = h;
+
+        // Skip to the end of the header (after "255\n")
+        size_t headerEnd = headerStream.tellg();
+        auto pixelDataStart = std::find(buffer.begin() + headerEnd, buffer.end(), '\n') - buffer.begin() + 1;
+
+        // Process the pixel data
         _data.resize(_width * _height);
-
-        // Allocate buffer for pixel data and read it
-        size_t pixelDataSize = _width * _height * 3;
-        auto pixelData = std::unique_ptr<unsigned char[]>(new unsigned char[pixelDataSize]);
-        if (fread(pixelData.get(), 1, pixelDataSize, f) != pixelDataSize)
-        {
-            std::cerr << "Error reading the pixel data from the PPM file." << std::endl;
-            fclose(f);
-            return;
-        }
-
-        // Convert raw data to Pixel objects
+        const unsigned char *pixelData = buffer.data() + pixelDataStart;
         for (size_t i = 0; i < _width * _height; ++i)
         {
-            _data[i] = Pixel{pixelData[i * 3] / 255.0, pixelData[i * 3 + 1] / 255.0, pixelData[i * 3 + 2] / 255.0};
+            _data[i] = Pixel{
+                pixelData[i * 3] / 255.0,
+                pixelData[i * 3 + 1] / 255.0,
+                pixelData[i * 3 + 2] / 255.0};
         }
-
-        fclose(f);
     }
 }
 
 // Write the image to a file
 void Image::writeToFile(const std::string &path)
 {
-    // Using C-style fopen for better performance in binary file writing
-    FILE *f = fopen(path.c_str(), "wb");
-    if (!f)
+    std::ofstream file(path, std::ios::binary);
+    if (!file)
     {
         std::cerr << "Error opening the output file." << std::endl;
         return;
     }
 
-    // Writing PPM header
-    fprintf(f, "P6\n%d %d\n255\n", static_cast<int>(_width), static_cast<int>(_height));
+    file << "P6\n"
+         << _width << " " << _height << "\n255\n";
 
-    // Preparing pixel data for writing
-    size_t pixelDataSize = _width * _height * 3;
-    auto pixelData = std::unique_ptr<unsigned char[]>(new unsigned char[pixelDataSize]);
+    std::vector<unsigned char> pixelData(_width * _height * 3);
     for (size_t i = 0; i < _width * _height; ++i)
     {
-        size_t offset = i * 3;
-        pixelData[offset] = static_cast<unsigned char>(_data[i].r * 255);
-        pixelData[offset + 1] = static_cast<unsigned char>(_data[i].g * 255);
-        pixelData[offset + 2] = static_cast<unsigned char>(_data[i].b * 255);
+        pixelData[i * 3] = static_cast<unsigned char>(_data[i].r * 255);
+        pixelData[i * 3 + 1] = static_cast<unsigned char>(_data[i].g * 255);
+        pixelData[i * 3 + 2] = static_cast<unsigned char>(_data[i].b * 255);
     }
 
-    // Writing pixel data in a single operation for performance
-    fwrite(pixelData.get(), 1, pixelDataSize, f);
-
-    fclose(f);
+    file.write(reinterpret_cast<const char *>(pixelData.data()), pixelData.size());
+    if (!file)
+    {
+        std::cerr << "Error writing pixel data to file." << std::endl;
+    }
 }
