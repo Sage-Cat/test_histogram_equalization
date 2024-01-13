@@ -1,134 +1,180 @@
 #include "Image.h"
-#include "ImageProcessing.h"
-
 #include "jpeg_decoder.h"
-
 #include <fstream>
 #include <iostream>
 #include <algorithm>
+#include <cstring> // for memcpy
+#include <memory>  // for smart pointers
 
-Pixel Image::getPixel(size_t x, size_t y) const
+// Get a pixel value from the image
+Pixel Image::getPixel(size_t x, size_t y) const noexcept
 {
     return _data.at(_width * y + x);
 }
 
-void Image::setPixel(size_t x, size_t y, Pixel value)
+// Set a pixel value in the image
+void Image::setPixel(size_t x, size_t y, const Pixel &value) noexcept
 {
     _data.at(_width * y + x) = value;
 }
 
-size_t Image::width()  const
+// Get the width of the image
+size_t Image::width() const noexcept
 {
     return _width;
 }
 
-size_t Image::height() const
+// Get the height of the image
+size_t Image::height() const noexcept
 {
     return _height;
 }
 
-size_t Image::area() const
+// Calculate the area of the image
+size_t Image::area() const noexcept
 {
-    return width() * height();
+    return _width * _height;
 }
 
-Image::Image(std::string const& path)
+// Constructor to load an image from a file
+Image::Image(const std::string &path)
 {
-    auto getFileExtension = [](std::string const& path) -> std::string {
+    // Lambda for extracting file extension in lowercase
+    auto getFileExtension = [](const std::string &path) -> std::string
+    {
         auto dotPos = path.rfind(".");
-        std::string result = dotPos == std::string::npos ? "" : path.substr(dotPos + 1);
-        std::transform(result.begin(), result.end(), result.begin(), ::tolower);
-        return result;
+        if (dotPos == std::string::npos)
+            return "";
+        std::string extension = path.substr(dotPos + 1);
+        std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+        return extension;
     };
-    
+
     std::string extension = getFileExtension(path);
-    
-    if (extension == "jpg" || extension == "jpeg") {
-        // This mess from tiny_jpeg library example...
-        FILE* f = fopen(path.c_str(), "rb");
-        if (!f) {
-            printf("Error opening the input file.\n");
+
+    if (extension == "jpg" || extension == "jpeg")
+    {
+        // Open file with C-style fopen for performance
+        FILE *f = fopen(path.c_str(), "rb");
+        if (!f)
+        {
+            std::cerr << "Error opening the input file." << std::endl;
             return;
         }
+        // Determine file size for buffer allocation
         fseek(f, 0, SEEK_END);
         size_t size = ftell(f);
-        unsigned char* buf = (unsigned char*)malloc(size);
+        // Use smart pointer for automatic memory management
+        auto buf = std::unique_ptr<unsigned char[]>(new unsigned char[size]);
         fseek(f, 0, SEEK_SET);
-        size_t read = fread(buf, 1, size, f);
+        fread(buf.get(), 1, size, f);
         fclose(f);
-        
-        Jpeg::Decoder decoder(buf, size);
-        if (decoder.GetResult() != Jpeg::Decoder::OK) {
-            printf("Error decoding the input file\n");
-            return;
-        }
-        
-        if (decoder.IsColor()) {
-            _width = decoder.GetWidth();
-            _height = decoder.GetHeight();
-            _data.resize(area());
-            std::fill_n(_data.begin(), area(), Pixel{});
-            
-            for (size_t x = 0; x < width(); ++x) {
-                for (size_t y = 0; y < height(); ++y) {
-                    auto jpgPixel = decoder.GetImage() + (x + width() * y) * 3;
-                    setPixel(x, y, Pixel{jpgPixel[0] / 255.0f, jpgPixel[1] / 255.0f, jpgPixel[2] / 255.0f});
-                }
-            }
-        }
-    } else if (extension == "ppm"){
-        std::ifstream file(path, std::ifstream::binary);
-        if (!file.is_open()) {
-            std::cerr << "Error opening the input file \"" << path << "\"" << std::endl;
-            return;
-        }
-        char buf[8]{};
-        file.read(buf, 3);
-        if (std::string(buf) == "P6\n") {
-            std::fill(std::begin(buf), std::end(buf), 0);
-            size_t w{}, h{};
-            file >> w;
-            file.ignore(1);
-            file >> h;
-            file.ignore(2);
-            
-            _width = w;
-            _height = h;
-            _data.resize(area());
-            std::fill_n(_data.begin(), area(), Pixel{});
 
-            for (size_t y = 0; y < height(); ++y) {
-                for (size_t x = 0; x < width(); ++x) {
-                    file.read(buf, 3);
-                    setPixel(x, y, Pixel{buf[0] / 255.0f, buf[1] / 255.0f, buf[2] / 255.0f});
-                }
-            }
+        // Decode JPEG using external library
+        Jpeg::Decoder decoder(buf.get(), size);
+        if (decoder.GetResult() != Jpeg::Decoder::OK)
+        {
+            std::cerr << "Error decoding the JPEG file." << std::endl;
+            return;
         }
+
+        // Set image dimensions and reserve memory for pixel data
+        _width = decoder.GetWidth();
+        _height = decoder.GetHeight();
+        _data.resize(_width * _height);
+        auto *decodedData = decoder.GetImage();
+        // Convert raw data to Pixel objects
+        for (size_t i = 0; i < _width * _height; ++i)
+        {
+            _data[i] = Pixel{decodedData[i * 3] / 255.0, decodedData[i * 3 + 1] / 255.0, decodedData[i * 3 + 2] / 255.0};
+        }
+    }
+    else if (extension == "ppm")
+    {
+        // Open PPM file with C-style I/O for better performance
+        FILE *f = fopen(path.c_str(), "rb");
+        if (!f)
+        {
+            std::cerr << "Error opening the input file \"" << path << "\"." << std::endl;
+            return;
+        }
+
+        // Read and verify the PPM header
+        char header[20];
+        if (!fgets(header, sizeof(header), f))
+        {
+            std::cerr << "Error reading the header of the PPM file." << std::endl;
+            fclose(f);
+            return;
+        }
+
+        if (strncmp(header, "P6", 2) != 0)
+        {
+            std::cerr << "Unsupported PPM format." << std::endl;
+            fclose(f);
+            return;
+        }
+
+        // Read image dimensions
+        unsigned w, h;
+        if (fscanf(f, "%u %u\n255\n", &w, &h) != 2)
+        {
+            std::cerr << "Error reading the width and height from the PPM file." << std::endl;
+            fclose(f);
+            return;
+        }
+
+        _width = w;
+        _height = h;
+        _data.resize(_width * _height);
+
+        // Allocate buffer for pixel data and read it
+        size_t pixelDataSize = _width * _height * 3;
+        auto pixelData = std::unique_ptr<unsigned char[]>(new unsigned char[pixelDataSize]);
+        if (fread(pixelData.get(), 1, pixelDataSize, f) != pixelDataSize)
+        {
+            std::cerr << "Error reading the pixel data from the PPM file." << std::endl;
+            fclose(f);
+            return;
+        }
+
+        // Convert raw data to Pixel objects
+        for (size_t i = 0; i < _width * _height; ++i)
+        {
+            _data[i] = Pixel{pixelData[i * 3] / 255.0, pixelData[i * 3 + 1] / 255.0, pixelData[i * 3 + 2] / 255.0};
+        }
+
+        fclose(f);
     }
 }
 
-void Image::writeToFile(std::string const& path)
+// Write the image to a file
+void Image::writeToFile(const std::string &path)
 {
-    auto pixel_data = std::vector<uint8_t>(width() * height() * 3);
-    for (size_t y = 0; y < height(); ++y) {
-        for (size_t x = 0; x < width(); ++x) {
-            auto pixel = getPixel(x, y);
-            size_t offset = (x + width() * y) * 3;
-            pixel_data.at(offset + 0) = pixel.r * 255;
-            pixel_data.at(offset + 1) = pixel.g * 255;
-            pixel_data.at(offset + 2) = pixel.b * 255;
-        }
-    }
-    
-    std::ofstream file(path, std::ofstream::binary | std::ofstream::trunc);
-    if (!file.is_open()) {
-        std::cerr << "Error opening the output file \"" << path << "\"" << std::endl;
+    // Using C-style fopen for better performance in binary file writing
+    FILE *f = fopen(path.c_str(), "wb");
+    if (!f)
+    {
+        std::cerr << "Error opening the output file." << std::endl;
         return;
     }
-    
-    file << "P6\n"
-         << static_cast<int>(width()) << " " << static_cast<int>(height()) << "\n"
-         << "255\n";
-    file.write(reinterpret_cast<char const*>(pixel_data.data()), pixel_data.size());
-}
 
+    // Writing PPM header
+    fprintf(f, "P6\n%d %d\n255\n", static_cast<int>(_width), static_cast<int>(_height));
+
+    // Preparing pixel data for writing
+    size_t pixelDataSize = _width * _height * 3;
+    auto pixelData = std::unique_ptr<unsigned char[]>(new unsigned char[pixelDataSize]);
+    for (size_t i = 0; i < _width * _height; ++i)
+    {
+        size_t offset = i * 3;
+        pixelData[offset] = static_cast<unsigned char>(_data[i].r * 255);
+        pixelData[offset + 1] = static_cast<unsigned char>(_data[i].g * 255);
+        pixelData[offset + 2] = static_cast<unsigned char>(_data[i].b * 255);
+    }
+
+    // Writing pixel data in a single operation for performance
+    fwrite(pixelData.get(), 1, pixelDataSize, f);
+
+    fclose(f);
+}
