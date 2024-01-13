@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8.12)
-project(sklm_test)
+project(histo_equalis_test)
 
 add_compile_options(-std=c++14)
 
@@ -11,4 +11,4 @@ set(SRC test_cpp/Image.cpp
         test_cpp/main.cpp
 )
 
-add_executable(sklm_test ${SRC})
+add_executable(histo_equalis_test ${SRC})
