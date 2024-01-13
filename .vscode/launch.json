@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/SageDocsUi.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "C:/Qt/Tools/mingw1120_64/bin/gdb.exe",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "${env:PATH};C:/Qt/6.5.3/mingw_64/bin"
+        }
+      ],
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ],
+      "preLaunchTask": "cmake-build-debug",
+      "visualizerFile": "c:\\Users\\sagec\\AppData\\Roaming\\Code\\User\\workspaceStorage\\2903cc54f2cf9b316e2f92c58173ce04\\tonka3000.qtvsctools\\qt.natvis.xml"
+    }
+  ]
+}
