@@ -1,95 +1,94 @@
 #include "ImageProcessing.h"
+
+#include <algorithm>
 #include <array>
-#include <cassert>
-#include <limits>
-#include <thread>
-#include <vector>
-#include <immintrin.h>
+#include <cmath>
+#include <stdexcept>
 
-enum RGB
+namespace
 {
-    R = 0,
-    G = 1,
-    B = 2
-};
-constexpr auto MAX_VALUE = std::numeric_limits<uint16_t>::max();
-using Histogram = std::array<size_t, MAX_VALUE>;
+constexpr std::size_t histogramSize = 256;
+using Histogram = std::array<std::size_t, histogramSize>;
 
-void calculateHistogram(const Image &image, int channel, Histogram &histogram, const Rect &roi)
+double luminance(const Pixel &pixel)
 {
-    double scaleFactor = MAX_VALUE - 1;
-    for (size_t y = roi.y; y < roi.y + roi.height; ++y)
-    {
-        for (size_t x = roi.x; x < roi.x + roi.width; ++x)
-        {
-            auto pixel = image.getPixel(x, y);
-            double value = (channel == R) ? pixel.r : (channel == G) ? pixel.g
-                                                                     : pixel.b;
-            histogram[static_cast<size_t>(value * scaleFactor)]++;
-        }
-    }
+    return std::clamp(0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b, 0.0, 1.0);
 }
 
-void calculateCFH(const Histogram &histogram, Histogram &cfh)
+std::size_t luminanceBin(const Pixel &pixel)
 {
-    size_t sum = 0;
-    for (size_t i = 0; i < histogram.size(); ++i)
-    {
-        sum += histogram[i];
-        cfh[i] = sum;
-    }
+    return static_cast<std::size_t>(std::lround(luminance(pixel) * 255.0));
 }
 
-void equalizeChannel(Image &image, const Rect &roi, int channel, const Histogram &cfh)
+void validateRoi(const Image &image, const Rect &roi)
 {
-    double imageArea = static_cast<double>(image.area());
-    double maxValueInv = 1.0 / MAX_VALUE;
-
-    for (size_t y = roi.y; y < roi.y + roi.height; ++y)
+    if (image.empty())
     {
-        for (size_t x = roi.x; x < roi.x + roi.width; ++x)
-        {
-            auto pixel = image.getPixel(x, y);
-            double &currentChannel = (channel == R) ? pixel.r : (channel == G) ? pixel.g
-                                                                               : pixel.b;
-            currentChannel = cfh[static_cast<size_t>(currentChannel * (MAX_VALUE - 1))] * maxValueInv / imageArea;
-            image.setPixel(x, y, pixel);
-        }
+        throw std::invalid_argument("Cannot equalize an empty image");
     }
+    if (roi.width == 0 || roi.height == 0 || roi.x > image.width() || roi.y > image.height() ||
+        roi.width > image.width() - roi.x || roi.height > image.height() - roi.y)
+    {
+        throw std::invalid_argument("Region of interest is outside the image");
+    }
+}
 }
 
 void doHistogramEqualization(Image &image, const Rect &roi)
 {
-    assert(roi.x >= 0 && roi.x + roi.width <= image.width());
-    assert(roi.y >= 0 && roi.y + roi.height <= image.height());
+    validateRoi(image, roi);
 
-    std::vector<std::thread> threads;
-    // Divide image into blocks for parallel processing
-    int numThreads = std::thread::hardware_concurrency();
-    int blockHeight = roi.height / numThreads;
-
-    for (int ch = 0; ch < 3; ++ch)
+    Histogram histogram{};
+    for (std::size_t y = roi.y; y < roi.y + roi.height; ++y)
     {
-        for (int i = 0; i < numThreads; ++i)
+        for (std::size_t x = roi.x; x < roi.x + roi.width; ++x)
         {
-            Rect blockRoi = {roi.x, roi.y + i * blockHeight, roi.width, blockHeight};
-            if (i == numThreads - 1)
-            {
-                // Handle the last block
-                blockRoi.height = roi.height - (numThreads - 1) * blockHeight;
-            }
-
-            threads.emplace_back([&, ch, blockRoi]()
-                                 {
-                Histogram hist{}, cfh{};
-                calculateHistogram(image, ch, hist, blockRoi);
-                calculateCFH(hist, cfh);
-                equalizeChannel(image, blockRoi, ch, cfh); });
+            ++histogram[luminanceBin(image.getPixel(x, y))];
         }
     }
 
-    for (auto &thread : threads)
+    Histogram cumulative{};
+    std::size_t runningTotal = 0;
+    std::size_t firstNonZero = 0;
+    for (std::size_t i = 0; i < histogram.size(); ++i)
     {
-        thread.join();
+        runningTotal += histogram[i];
+        cumulative[i] = runningTotal;
+        if (firstNonZero == 0 && histogram[i] != 0)
+        {
+            firstNonZero = runningTotal;
+        }
+    }
+
+    const std::size_t pixelCount = roi.width * roi.height;
+    if (pixelCount == firstNonZero)
+    {
+        return; // A constant-luminance image has no contrast to expand.
+    }
+
+    std::array<double, histogramSize> mapping{};
+    const double denominator = static_cast<double>(pixelCount - firstNonZero);
+    for (std::size_t i = 0; i < mapping.size(); ++i)
+    {
+        const std::size_t adjusted = cumulative[i] > firstNonZero ? cumulative[i] - firstNonZero : 0;
+        mapping[i] = static_cast<double>(adjusted) / denominator;
+    }
+
+    for (std::size_t y = roi.y; y < roi.y + roi.height; ++y)
+    {
+        for (std::size_t x = roi.x; x < roi.x + roi.width; ++x)
+        {
+            const Pixel pixel = image.getPixel(x, y);
+            const double oldY = luminance(pixel);
+            const double cb = (pixel.b - oldY) * 0.564;
+            const double cr = (pixel.r - oldY) * 0.713;
+            const double newY = mapping[luminanceBin(pixel)];
+
+            image.setPixel(x, y, {
+                                     std::clamp(newY + 1.403 * cr, 0.0, 1.0),
+                                     std::clamp(newY - 0.344 * cb - 0.714 * cr, 0.0, 1.0),
+                                     std::clamp(newY + 1.773 * cb, 0.0, 1.0),
+                                 });
+        }
     }
 }

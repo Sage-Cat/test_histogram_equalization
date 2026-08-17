@@ -1,176 +1,204 @@
 #include "Image.h"
 
-#include <fstream>
-#include <iostream>
 #include <algorithm>
-#include <cstring>
-#include <memory>
-#include <vector>
-#include <sstream>
+#include <charconv>
+#include <cctype>
+#include <cmath>
+#include <fstream>
+#include <limits>
+#include <stdexcept>
+#include <string_view>
 
-#include "jpeg_decoder.h"
-
-// Get a pixel value from the image
-Pixel Image::getPixel(size_t x, size_t y) const noexcept
+namespace
 {
+std::string readPpmToken(std::istream &stream)
+{
+    std::string token;
+    char character = 0;
+
+    while (stream.get(character))
+    {
+        if (character == '#')
+        {
+            stream.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        }
+        else if (!std::isspace(static_cast<unsigned char>(character)))
+        {
+            token.push_back(character);
+            break;
+        }
+    }
+
+    while (stream.get(character))
+    {
+        if (std::isspace(static_cast<unsigned char>(character)))
+        {
+            if (character == '\r' && stream.peek() == '\n')
+            {
+                stream.get();
+            }
+            break;
+        }
+        if (character == '#')
+        {
+            stream.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            break;
+        }
+        token.push_back(character);
+        if (token.size() > 64)
+        {
+            throw std::runtime_error("Malformed PPM header token");
+        }
+    }
+
+    if (token.empty())
+    {
+        throw std::runtime_error("Malformed PPM header");
+    }
+    return token;
+}
+
+std::size_t parseSize(std::string_view token, std::string_view field)
+{
+    std::size_t value = 0;
+    const auto result = std::from_chars(token.data(), token.data() + token.size(), value);
+    if (result.ec != std::errc{} || result.ptr != token.data() + token.size() || value == 0)
+    {
+        throw std::runtime_error("Invalid PPM " + std::string(field));
+    }
+    return value;
+}
+
+std::size_t checkedArea(std::size_t width, std::size_t height)
+{
+    if (width == 0 || height == 0)
+    {
+        throw std::invalid_argument("Image dimensions must be positive");
+    }
+    if (width > std::numeric_limits<std::size_t>::max() / height)
+    {
+        throw std::overflow_error("Image dimensions are too large");
+    }
+    const std::size_t area = width * height;
+    const auto streamLimit = static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max());
+    if (area > std::numeric_limits<std::size_t>::max() / 3 || area > streamLimit / 3)
+    {
+        throw std::overflow_error("Image byte count is too large");
+    }
+    return area;
+}
+
+unsigned char toByte(double value)
+{
+    return static_cast<unsigned char>(std::lround(std::clamp(value, 0.0, 1.0) * 255.0));
+}
+}
+
+Image::Image(const std::string &path)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+    {
+        throw std::runtime_error("Unable to open input image: " + path);
+    }
+
+    if (readPpmToken(file) != "P6")
+    {
+        throw std::runtime_error("Unsupported image format; expected binary PPM (P6)");
+    }
+
+    _width = parseSize(readPpmToken(file), "width");
+    _height = parseSize(readPpmToken(file), "height");
+    if (parseSize(readPpmToken(file), "maximum value") != 255)
+    {
+        throw std::runtime_error("Unsupported PPM maximum value; expected 255");
+    }
+
+    const std::size_t pixelCount = checkedArea(_width, _height);
+    std::vector<unsigned char> bytes(pixelCount * 3);
+    if (!file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())))
+    {
+        throw std::runtime_error("PPM pixel data is truncated");
+    }
+
+    _data.resize(pixelCount);
+    for (std::size_t i = 0; i < pixelCount; ++i)
+    {
+        _data[i] = {
+            bytes[i * 3] / 255.0,
+            bytes[i * 3 + 1] / 255.0,
+            bytes[i * 3 + 2] / 255.0,
+        };
+    }
+}
+
+Image::Image(std::size_t width, std::size_t height, const Pixel &fill)
+    : _width(width), _height(height), _data(checkedArea(width, height), fill)
+{
+}
+
+Pixel Image::getPixel(std::size_t x, std::size_t y) const
+{
+    if (x >= _width || y >= _height)
+    {
+        throw std::out_of_range("Pixel coordinates are outside the image");
+    }
     return _data.at(_width * y + x);
 }
 
-// Set a pixel value in the image
-void Image::setPixel(size_t x, size_t y, const Pixel &value) noexcept
+void Image::setPixel(std::size_t x, std::size_t y, const Pixel &value)
 {
+    if (x >= _width || y >= _height)
+    {
+        throw std::out_of_range("Pixel coordinates are outside the image");
+    }
     _data.at(_width * y + x) = value;
 }
 
-// Get the width of the image
-size_t Image::width() const noexcept
+std::size_t Image::width() const noexcept
 {
     return _width;
 }
 
-// Get the height of the image
-size_t Image::height() const noexcept
+std::size_t Image::height() const noexcept
 {
     return _height;
 }
 
-// Calculate the area of the image
-size_t Image::area() const noexcept
+std::size_t Image::area() const noexcept
 {
     return _width * _height;
 }
 
-// Constructor to load an image from a file
-Image::Image(const std::string &path)
+bool Image::empty() const noexcept
 {
-    // Lambda for extracting file extension in lowercase
-    auto getFileExtension = [](const std::string &path) -> std::string
-    {
-        auto dotPos = path.rfind(".");
-        if (dotPos == std::string::npos)
-            return "";
-        std::string extension = path.substr(dotPos + 1);
-        std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
-        return extension;
-    };
-
-    std::string extension = getFileExtension(path);
-
-    if (extension == "jpg" || extension == "jpeg")
-    {
-        // Open file with C-style fopen for performance
-        FILE *f = fopen(path.c_str(), "rb");
-        if (!f)
-        {
-            std::cerr << "Error opening the input file." << std::endl;
-            return;
-        }
-        // Determine file size for buffer allocation
-        fseek(f, 0, SEEK_END);
-        size_t size = ftell(f);
-        // Use smart pointer for automatic memory management
-        auto buf = std::unique_ptr<unsigned char[]>(new unsigned char[size]);
-        fseek(f, 0, SEEK_SET);
-        fread(buf.get(), 1, size, f);
-        fclose(f);
-
-        // Decode JPEG using external library
-        Jpeg::Decoder decoder(buf.get(), size);
-        if (decoder.GetResult() != Jpeg::Decoder::OK)
-        {
-            std::cerr << "Error decoding the JPEG file." << std::endl;
-            return;
-        }
-
-        // Set image dimensions and reserve memory for pixel data
-        _width = decoder.GetWidth();
-        _height = decoder.GetHeight();
-        _data.resize(_width * _height);
-        auto *decodedData = decoder.GetImage();
-        // Convert raw data to Pixel objects
-        for (size_t i = 0; i < _width * _height; ++i)
-        {
-            _data[i] = Pixel{decodedData[i * 3] / 255.0, decodedData[i * 3 + 1] / 255.0, decodedData[i * 3 + 2] / 255.0};
-        }
-    }
-    else if (extension == "ppm")
-    {
-        // Open the PPM file in binary mode and position the file pointer at the end
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file)
-        {
-            std::cerr << "Error opening the input file \"" << path << "\"." << std::endl;
-            return;
-        }
-
-        // Determine the file size and allocate a buffer
-        auto fileSize = file.tellg();
-        file.seekg(0, std::ios::beg);
-        std::vector<unsigned char> buffer(fileSize);
-
-        // Read the entire file into the buffer
-        if (!file.read(reinterpret_cast<char *>(buffer.data()), fileSize))
-        {
-            std::cerr << "Error reading the PPM file." << std::endl;
-            return;
-        }
-
-        // Parse the PPM header from the buffer
-        std::istringstream headerStream(std::string(buffer.begin(), buffer.begin() + 15)); // Assuming header is within first 15 bytes
-        std::string type;
-        headerStream >> type; // Should be "P6"
-        if (type != "P6")
-        {
-            std::cerr << "Unsupported PPM format: " << type << std::endl;
-            return;
-        }
-
-        size_t w, h;
-        headerStream >> w >> h;
-        _width = w;
-        _height = h;
-
-        // Skip to the end of the header (after "255\n")
-        size_t headerEnd = headerStream.tellg();
-        auto pixelDataStart = std::find(buffer.begin() + headerEnd, buffer.end(), '\n') - buffer.begin() + 1;
-
-        // Process the pixel data
-        _data.resize(_width * _height);
-        const unsigned char *pixelData = buffer.data() + pixelDataStart;
-        for (size_t i = 0; i < _width * _height; ++i)
-        {
-            _data[i] = Pixel{
-                pixelData[i * 3] / 255.0,
-                pixelData[i * 3 + 1] / 255.0,
-                pixelData[i * 3 + 2] / 255.0};
-        }
-    }
+    return _data.empty();
 }
 
-// Write the image to a file
-void Image::writeToFile(const std::string &path)
+void Image::writeToFile(const std::string &path) const
 {
+    if (empty())
+    {
+        throw std::runtime_error("Cannot write an empty image");
+    }
+
     std::ofstream file(path, std::ios::binary);
     if (!file)
     {
-        std::cerr << "Error opening the output file." << std::endl;
-        return;
+        throw std::runtime_error("Unable to open output image: " + path);
     }
 
-    file << "P6\n"
-         << _width << " " << _height << "\n255\n";
-
-    std::vector<unsigned char> pixelData(_width * _height * 3);
-    for (size_t i = 0; i < _width * _height; ++i)
+    file << "P6\n" << _width << ' ' << _height << "\n255\n";
+    std::vector<unsigned char> bytes(_data.size() * 3);
+    for (std::size_t i = 0; i < _data.size(); ++i)
     {
-        pixelData[i * 3] = static_cast<unsigned char>(_data[i].r * 255);
-        pixelData[i * 3 + 1] = static_cast<unsigned char>(_data[i].g * 255);
-        pixelData[i * 3 + 2] = static_cast<unsigned char>(_data[i].b * 255);
+        bytes[i * 3] = toByte(_data[i].r);
+        bytes[i * 3 + 1] = toByte(_data[i].g);
+        bytes[i * 3 + 2] = toByte(_data[i].b);
     }
-
-    file.write(reinterpret_cast<const char *>(pixelData.data()), pixelData.size());
+    file.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     if (!file)
     {
-        std::cerr << "Error writing pixel data to file." << std::endl;
+        throw std::runtime_error("Unable to write output image: " + path);
     }
 }

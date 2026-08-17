@@ -2,15 +2,15 @@
 
 #include "Image.h"
 
-// Define a structure to represent a rectangular region of interest (ROI) in an image
+#include <cstddef>
+
 struct Rect
 {
-    int x;      // X-coordinate of the top-left corner
-    int y;      // Y-coordinate of the top-left corner
-    int width;  // Width of the rectangle
-    int height; // Height of the rectangle
+    std::size_t x;
+    std::size_t y;
+    std::size_t width;
+    std::size_t height;
 };
 
-// Function to perform histogram equalization on the entire image for each RGB channel
-// within a specified region of interest (ROI)
+// Equalizes 8-bit luminance inside the ROI while retaining the chroma channels.
 void doHistogramEqualization(Image &image, const Rect &roi);

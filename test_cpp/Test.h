@@ -1,6 +1,11 @@
 #pragma once
 
-#include <string>
+#include "Image.h"
 
-/// Work only with ppm p6 binary format or jpeg
-void compareTwoImages(std::string const& imagePath_1, std::string const& imagePath_2);
+struct DifferenceMetrics
+{
+    double maximumAbsoluteError{0.0};
+    double meanAbsoluteError{0.0};
+};
+
+DifferenceMetrics compareTwoImages(const Image &first, const Image &second);
