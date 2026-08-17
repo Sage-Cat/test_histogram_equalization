@@ -1,32 +1,48 @@
-## Program Description
+# Histogram Equalization Demo
 
-In the `src` folder, there is the code of a program that can:
+[![CI](https://github.com/Sage-Cat/test_histogram_equalization/actions/workflows/ci.yml/badge.svg)](https://github.com/Sage-Cat/test_histogram_equalization/actions/workflows/ci.yml)
 
-- Open an image in jpg or ppm p6 binary format.
-- Perform histogram equalization.
-- Save the result in ppm p6 binary format.
-- Compare differences between two photographs saved in ppm p6 binary format.
+A compact C++17 command-line demonstration of global histogram equalization.
+It reads an 8-bit binary PPM image (`P6`), equalizes luminance within a region,
+retains the two chroma components, and writes another `P6` image. Processing
+luminance instead of the three RGB channels independently reduces color shifts.
+The algorithm builds a 256-bin luminance cumulative distribution and remaps the
+darkest and brightest occupied levels across the available output range.
 
-## Examples of Program Operation
+## Build and test
 
-**Open an image, apply the effect, save the result:**
+Prerequisites are a C++17 compiler, CMake 3.20 or newer, and optionally Ninja.
+Ubuntu 24.04 is continuously tested.
 
-```bash
-./histo_equalis_test input.jpg output.ppm
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-**Open an image, apply the effect, save the result and compare it with a reference:**
+Tests generate their PPM fixtures at runtime; no sample photographs are needed.
 
-```bash
-./histo_equalis_test input.jpg output.ppm reference.ppm
+## Usage
+
+```sh
+./build/histogram_equalize input.ppm output.ppm
+./build/histogram_equalize input.ppm output.ppm reference.ppm
 ```
 
-## Task Objective
+The optional reference comparison reports maximum and mean absolute channel
+errors on the normalized `[0, 1]` scale. It exits unsuccessfully when the
+maximum error exceeds `0.005` (0.5%). Processing and overall elapsed times are
+also printed.
 
-The task is aimed at improving the current code in terms of performance as much as possible. You can use everything available in the standard C++14 library, multithreading, as well as SIMD instructions up to the AVX version. The result should be as identical as possible to the base. A difference of no more than half a percent per pixel per channel is allowed.
+## Limitations
 
-### Key Areas for Optimization
+- Only 8-bit RGB `P6` PPM files are accepted; JPEG, grayscale PPM, and higher
+  bit depths are deliberately outside this small demo.
+- Equalization uses an 8-bit luminance histogram and standard BT.601-style
+  RGB/luminance coefficients. Conversion and gamut clipping can slightly alter
+  highly saturated colors.
+- This is global equalization, not adaptive histogram equalization (CLAHE).
 
-- **Opening:** Excluding the work of the external library.
-- **Processing:** This is the most important part.
-- **Saving:** Ensuring efficient saving of the processed image.
+## License
+
+The original project code is available under the [MIT License](LICENSE).
